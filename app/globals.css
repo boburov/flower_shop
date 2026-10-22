@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Bloomé design tokens — a warm, light boutique palette.
+   (No dark mode: the brand is intentionally soft-white and editorial.)
+--------------------------------------------------------------------------- */
+@theme {
+  /* Surfaces */
+  --color-app-bg: #e9e9ec; /* desktop backdrop behind the phone column */
+  --color-app-top: #eceef1; /* soft cool grey at the top of the app */
+  --color-cream: #fbf7f3; /* app background */
+  --color-blush: #f7e9ec; /* soft pink wash */
+  --color-sand: #f1e8e1; /* warm neutral block */
+  --color-surface: #ffffff; /* cards */
+
+  /* Brand */
+  --color-rose: #c76b85; /* primary accent */
+  --color-rose-dark: #a9506a; /* hover / active */
+  --color-rose-soft: #e9b9c6; /* tints, badges */
+  --color-sage: #7f9b80; /* subtle green accent */
+
+  /* Ink */
+  --color-ink: #2b231f; /* headings + body */
+  --color-muted: #867b73; /* secondary text */
+  --color-line: #ece2db; /* borders / hairlines */
+
+  /* Typography */
+  --font-display: var(--font-fraunces), "Georgia", serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Radius */
+  --radius-card: 1.5rem;
+
+  /* Shadows — soft and diffuse, never harsh */
+  --shadow-soft: 0 1px 2px rgba(43, 35, 31, 0.04), 0 12px 32px -12px rgba(43, 35, 31, 0.12);
+  --shadow-lift: 0 2px 4px rgba(43, 35, 31, 0.05), 0 24px 48px -16px rgba(43, 35, 31, 0.18);
+}
+
+/* Base ---------------------------------------------------------------------- */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-app-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The app lives in a phone-width column, centered over the backdrop on desktop. */
+.app-shell {
+  position: relative;
+  margin-inline: auto;
+  display: flex;
+  min-height: 100svh;
+  width: 100%;
+  max-width: 480px;
+  flex-direction: column;
+  /* Soft cool-grey → cream gradient so the hero image fades into the page. */
+  background: linear-gradient(180deg, var(--color-app-top) 0%, var(--color-cream) 34%);
+}
+@media (min-width: 481px) {
+  .app-shell {
+    box-shadow: 0 0 0 1px rgba(43, 35, 31, 0.04), 0 30px 60px -20px rgba(43, 35, 31, 0.22);
+  }
+}
+
+/* Horizontal scroll rows (category chips, thumbnails) without a visible bar. */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Consistent, visible focus for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--color-rose);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Small composable utilities
+--------------------------------------------------------------------------- */
+@layer components {
+  .container-boutique {
+    width: 100%;
+    margin-inline: auto;
+    max-width: 80rem; /* 1280px */
+    padding-inline: 1rem;
+  }
+  @media (min-width: 640px) {
+    .container-boutique {
+      padding-inline: 1.5rem;
+    }
+  }
+  @media (min-width: 1024px) {
+    .container-boutique {
+      padding-inline: 2.5rem;
+    }
+  }
+
+  .eyebrow {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-rose);
+  }
+
+  /* Liquid glass: frosted translucent panel with a bright top highlight. */
+  .glass {
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.6),
+      rgba(255, 255, 255, 0.28)
+    );
+    backdrop-filter: blur(22px) saturate(180%);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    box-shadow:
+      0 8px 30px -10px rgba(43, 35, 31, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+
+  /* Lighter glass for cards sitting on the page (more opaque, less lift). */
+  .glass-card {
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.78),
+      rgba(255, 255, 255, 0.52)
+    );
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow:
+      0 6px 20px -12px rgba(43, 35, 31, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+
+  /* Fade an image out at the bottom into the page background. */
+  .hero-fade {
+    -webkit-mask-image: linear-gradient(to bottom, #000 68%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 68%, transparent 100%);
+  }
+}

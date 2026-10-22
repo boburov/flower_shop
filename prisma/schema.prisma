@@ -1,0 +1,62 @@
+// Prisma schema for the Bloomé flower boutique.
+// Database: Neon PostgreSQL. Access: server-side only (see lib/prisma.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection string (Neon pooler) used by the app at runtime.
+  url       = env("DATABASE_URL")
+  // Direct (non-pooled) connection used by Prisma Migrate.
+  directUrl = env("DIRECT_URL")
+}
+
+// Key-value shop settings editable from the admin bot (e.g. the home location).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  imageUrl  String?
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([slug])
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  description  String
+  // Whole-number price in the shop currency (UZS has no everyday sub-unit).
+  price        Int
+  currency     String   @default("UZS")
+  imageUrl     String?
+  // Descriptive size label (e.g. bouquet height). Does not affect price.
+  size         String?
+  isFeatured   Boolean  @default(false)
+  isBestseller Boolean  @default(false)
+  isAvailable  Boolean  @default(true)
+  // Higher = more popular; drives the "popularity" sort in the catalogue.
+  popularity   Int      @default(0)
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([slug])
+  @@index([isFeatured])
+  @@index([isBestseller])
+}
