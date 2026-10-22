@@ -421,17 +421,22 @@ async function main() {
   const backlog = await tg<Update[]>("getUpdates", { timeout: 0, offset: -1 });
   if (backlog.length > 0) offset = backlog[backlog.length - 1].update_id + 1;
 
+  // Short-poll (timeout: 0) with a small delay, instead of a 30s long-poll.
+  // Some networks (e.g. ISPs in Uzbekistan) tear down sustained connections to
+  // Telegram, so a long-poll request is reset mid-flight ("fetch failed"). Quick
+  // requests complete before that happens, so we poll briefly every POLL_DELAY ms.
+  const POLL_DELAY = 2000;
   for (;;) {
     try {
-      const updates = await tg<Update[]>("getUpdates", { timeout: 30, offset });
+      const updates = await tg<Update[]>("getUpdates", { timeout: 0, offset });
       for (const u of updates) {
         offset = u.update_id + 1;
         await handleUpdate(u);
       }
     } catch (error) {
       console.error("polling error:", (error as Error).message);
-      await new Promise((r) => setTimeout(r, 2000));
     }
+    await new Promise((r) => setTimeout(r, POLL_DELAY));
   }
 }
 
