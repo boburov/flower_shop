@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { Catalogue } from "@/components/products/catalogue";
 import { getProducts, getCategories } from "@/lib/products";
 
+// Admin-bot edits must reach the catalogue without a rebuild.
+export const revalidate = 60;
+
 export const metadata: Metadata = {
   title: "Katalog",
   description:

@@ -8,9 +8,12 @@ import { ProductListCard } from "@/components/app/product-list-card";
 import { getProductBySlug, getAllProductSlugs, getProducts } from "@/lib/products";
 import { resolveImageUrl, formatPrice } from "@/lib/config";
 
-// The catalogue is known at build time, so any slug not produced by
-// generateStaticParams is a genuine 404 (correct status for SEO/crawlers).
-export const dynamicParams = false;
+// Products are added from the admin bot after the build, so slugs are NOT all
+// known at build time. generateStaticParams only pre-renders the ones that exist
+// at build; dynamicParams (the default, true) lets anything added later render on
+// demand instead of 404-ing, and revalidate keeps existing pages from going stale.
+export const dynamicParams = true;
+export const revalidate = 60;
 
 export async function generateStaticParams() {
   const slugs = await getAllProductSlugs();

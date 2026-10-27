@@ -49,7 +49,11 @@ export async function getShopLocation(): Promise<ShopLocation> {
       });
       const map = new Map(rows.map((r) => [r.key, r.value]));
       city = map.get(LOCATION_CITY_KEY)?.trim() || fallback.city;
-      area = map.get(LOCATION_AREA_KEY)?.trim() || fallback.area;
+      // An area saved as empty means the admin deliberately skipped the district
+      // (the bot's /skip), so honour it. Only an absent row falls back to the
+      // config default — otherwise skipping would resurrect the demo district.
+      const savedArea = map.get(LOCATION_AREA_KEY);
+      area = savedArea === undefined ? fallback.area : savedArea.trim();
       maps = map.get(LOCATION_MAPS_KEY)?.trim() || undefined;
     } catch (error) {
       console.error("[settings] getShopLocation failed, using config fallback:", error);

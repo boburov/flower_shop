@@ -2,6 +2,9 @@ import type { MetadataRoute } from "next";
 import { siteConfig } from "@/lib/config";
 import { getAllProductSlugs } from "@/lib/products";
 
+// Rebuilt hourly so products added from the admin bot get indexed.
+export const revalidate = 3600;
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = siteConfig.url.replace(/\/$/, "");
   const slugs = await getAllProductSlugs();

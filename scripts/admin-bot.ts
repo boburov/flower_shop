@@ -27,9 +27,34 @@ const ADMIN_IDS = (process.env.TELEGRAM_ADMIN_CHAT_ID ?? "")
 // Base URL for the Telegram Bot API. Defaults to Telegram directly; set
 // TELEGRAM_API_BASE to a reverse proxy (e.g. a Cloudflare Worker) on hosts that
 // cannot reach api.telegram.org — see cloudflare/README.md.
-const API_BASE = process.env.TELEGRAM_API_BASE?.trim().replace(/\/+$/, "") || "https://api.telegram.org";
-const API = `${API_BASE}/bot${TOKEN}`;
+const TELEGRAM_DIRECT = "https://api.telegram.org";
+const API_BASE = process.env.TELEGRAM_API_BASE?.trim().replace(/\/+$/, "") || TELEGRAM_DIRECT;
+// Retries alternate over these. Keeping the direct host as a second base means a
+// relay that is down, rate-limited or over its quota no longer takes the bot with it.
+const API_BASES = API_BASE === TELEGRAM_DIRECT ? [TELEGRAM_DIRECT] : [API_BASE, TELEGRAM_DIRECT];
 const prisma = new PrismaClient();
+
+// Website cache revalidation. The site caches catalogue pages, so after a change
+// we ask it to refresh immediately instead of waiting for the cache to expire.
+const SITE_URL = process.env.SITE_URL?.trim().replace(/\/+$/, "") || "http://127.0.0.1:3000";
+const REVALIDATE_SECRET = process.env.REVALIDATE_SECRET?.trim();
+
+/** Best-effort: ask the website to drop its cached catalogue pages. */
+async function revalidateSite(slug?: string): Promise<void> {
+  if (!REVALIDATE_SECRET) return;
+  const url = `${SITE_URL}/api/revalidate${slug ? `?slug=${encodeURIComponent(slug)}` : ""}`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "x-revalidate-secret": REVALIDATE_SECRET },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) console.error("revalidate failed:", res.status, await res.text().catch(() => ""));
+  } catch (error) {
+    // Not fatal: the pages still refresh on their own revalidate window.
+    console.error("revalidate request failed:", (error as Error).message);
+  }
+}
 
 const LOCATION_CITY_KEY = "location_city";
 const LOCATION_AREA_KEY = "location_area";
@@ -40,6 +65,7 @@ const COMMANDS = [
   { command: "list", description: "Mahsulotlar ro'yxati" },
   { command: "delete", description: "Mahsulotni o'chirish" },
   { command: "location", description: "Do'kon manzilini o'zgartirish" },
+  { command: "confirm", description: "Yangi mahsulotni tasdiqlash" },
   { command: "cancel", description: "Joriy amalni bekor qilish" },
   { command: "id", description: "Chat id'ni ko'rsatish" },
 ];
@@ -51,21 +77,68 @@ function hasDatabase(): boolean {
 
 // ---- Telegram API helpers --------------------------------------------------
 
-async function tg<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${API}/${method}`, {
+async function tgOnce<T>(base: string, method: string, params: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${base}/bot${TOKEN}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
+    signal: AbortSignal.timeout(20_000),
   });
-  const json = (await res.json()) as { ok: boolean; result?: T; description?: string };
+  const body = await res.text();
+  let json: { ok: boolean; result?: T; description?: string };
+  try {
+    json = JSON.parse(body);
+  } catch {
+    // A proxy that is down/over quota answers with an HTML error page. Surface
+    // that as a retryable transport error rather than a confusing JSON error.
+    throw new Error(`${method}: non-JSON response (HTTP ${res.status}) from ${base}`);
+  }
   if (!json.ok) throw new Error(json.description ?? `${method} failed`);
   return json.result as T;
 }
 
-function send(chatId: number | string, text: string) {
-  return tg("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" }).catch((e) =>
-    console.error("sendMessage failed:", (e as Error).message),
-  );
+/**
+ * Call the Telegram Bot API, retrying across transport failures.
+ *
+ * Calls are retried with a short backoff, and each retry alternates between the
+ * configured API bases (a relay plus api.telegram.org, when they differ). The
+ * network between this VPS and Telegram drops requests intermittently, and the
+ * previous single-shot version turned every such blip into a lost reply: the
+ * admin's step prompt never arrived and the add flow looked dead.
+ */
+async function tg<T = unknown>(
+  method: string,
+  params: Record<string, unknown>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: Error = new Error(`${method} failed`);
+  for (let i = 0; i < attempts; i++) {
+    const base = API_BASES[i % API_BASES.length];
+    try {
+      return await tgOnce<T>(base, method, params);
+    } catch (error) {
+      lastError = error as Error;
+      // A rejection from Telegram itself (not transport) will not fix itself.
+      if (/^(Bad Request|Unauthorized|Forbidden|Conflict)/i.test(lastError.message)) break;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Send a message to an admin. Unlike a plain `tg` call this never rejects, but it
+ * does report failure, so a dropped prompt is visible in the logs instead of
+ * silently stalling the conversation.
+ */
+async function send(chatId: number | string, text: string): Promise<boolean> {
+  try {
+    await tg("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" }, 4);
+    return true;
+  } catch (error) {
+    console.error(`sendMessage to ${chatId} failed after retries:`, (error as Error).message);
+    return false;
+  }
 }
 
 // ---- Conversation state (in-memory) ---------------------------------------
@@ -203,7 +276,18 @@ async function handleText(chatId: number, text: string) {
   if (t === "/location") return startLocation(chatId);
   if (t === "/delete") return startDelete(chatId);
 
-  if (!session) return send(chatId, "Buyruqni tanlang: /menu");
+  if (!session) {
+    // Drafts live in memory only, so a bot restart loses an in-progress /add.
+    // Say so, rather than answering an answer with a menu prompt.
+    if (!t.startsWith("/")) {
+      return send(
+        chatId,
+        "Hozir hech qanday amal boshlanmagan (bot qayta ishga tushgan bo'lishi mumkin).\n" +
+          "Mahsulot qo'shish uchun /add yuboring.",
+      );
+    }
+    return send(chatId, `Noma'lum buyruq.\n\n${menuText()}`);
+  }
 
   if (session.flow === "location") return handleLocationStep(chatId, session, t);
   if (session.flow === "delete") return handleDeleteStep(chatId, session, t);
@@ -234,6 +318,7 @@ async function handleLocationStep(chatId: number, s: Session, t: string) {
   await setSetting(LOCATION_CITY_KEY, s.draft.city ?? "");
   await setSetting(LOCATION_AREA_KEY, s.draft.area ?? "");
   await setSetting(LOCATION_MAPS_KEY, maps);
+  await revalidateSite();
   sessions.delete(chatId);
   const tail = s.draft.area ? " · " + s.draft.area : "";
   return send(
@@ -249,6 +334,7 @@ async function handleDeleteStep(chatId: number, s: Session, t: string) {
   if (!id) return send(chatId, "Noto'g'ri raqam. Ro'yxatdan raqam yuboring yoki /cancel.");
   const product = await prisma.product.findUnique({ where: { id } });
   await prisma.product.delete({ where: { id } });
+  await revalidateSite(product?.slug);
   sessions.delete(chatId);
   return send(chatId, `🗑 <b>${product?.name ?? "Mahsulot"}</b> o'chirildi.`);
 }
@@ -311,8 +397,14 @@ async function handleAddStep(chatId: number, s: Session, t: string) {
       return send(chatId, draftSummary(s.draft));
 
     case "confirm":
-      if (t === "/confirm") return saveProduct(chatId, s.draft);
-      return send(chatId, "Tasdiqlash uchun /confirm yoki bekor qilish uchun /cancel.");
+      // Accept a typed "ha" too — admins reply in words far more often than they
+      // tap the /confirm link, and a rejected confirmation used to strand the draft.
+      if (t === "/confirm" || YES.has(t.toLowerCase())) return saveProduct(chatId, s.draft);
+      if (t.toLowerCase().startsWith("yo")) {
+        sessions.delete(chatId);
+        return send(chatId, "Bekor qilindi. Qaytadan: /add");
+      }
+      return send(chatId, "Tasdiqlash uchun <b>/confirm</b> (yoki \"ha\"), bekor qilish uchun /cancel.");
   }
 }
 
@@ -323,7 +415,7 @@ async function handlePhoto(chatId: number, fileId: string) {
   }
   s.draft.imageUrl = `/api/images/${fileId}`;
   s.step = "featured";
-  return send(chatId, "7/7 — Bosh sahifada ko'rsatilsinmi? (ha / yo'q)");
+  return send(chatId, "🖼 Rasm qabul qilindi.\n\n7/7 — Bosh sahifada ko'rsatilsinmi? (ha / yo'q)");
 }
 
 async function saveProduct(chatId: number, draft: Draft) {
@@ -356,8 +448,13 @@ async function saveProduct(chatId: number, draft: Draft) {
     },
   });
 
+  await revalidateSite(slug);
   sessions.delete(chatId);
-  return send(chatId, `✅ <b>${draft.name}</b> qo'shildi!\nSahifa: /product/${slug}\n\nYana: /add`);
+  return send(
+    chatId,
+    `✅ <b>${draft.name}</b> qo'shildi!\nSahifa: /product/${slug}\n` +
+      `Jami mahsulot: ${await prisma.product.count()}\n\nYana: /add`,
+  );
 }
 
 // ---- Update dispatch -------------------------------------------------------
@@ -367,7 +464,9 @@ interface Update {
   message?: {
     chat: { id: number };
     text?: string;
+    caption?: string;
     photo?: { file_id: string }[];
+    document?: { file_id: string; mime_type?: string };
   };
 }
 
@@ -388,7 +487,19 @@ async function handleUpdate(u: Update) {
     if (msg.photo && msg.photo.length > 0) {
       return await handlePhoto(chatId, msg.photo[msg.photo.length - 1].file_id);
     }
-    if (typeof msg.text === "string") return await handleText(chatId, msg.text);
+    // A photo sent as a file ("send without compression") arrives as a document,
+    // not a photo. Accept it, instead of ignoring the message entirely.
+    if (msg.document?.mime_type?.startsWith("image/")) {
+      return await handlePhoto(chatId, msg.document.file_id);
+    }
+    const text = msg.text ?? msg.caption;
+    if (typeof text === "string") return await handleText(chatId, text);
+    // Anything else (sticker, voice, video, contact...) used to get no reply at
+    // all, which looked exactly like the bot being down.
+    return await send(
+      chatId,
+      "Bu turdagi xabarni qabul qila olmayman. Matn yoki rasm yuboring. Buyruqlar: /menu",
+    );
   } catch (error) {
     console.error("handleUpdate error:", error);
     return send(chatId, "Xatolik yuz berdi. /cancel qilib qaytadan urinib ko'ring.");

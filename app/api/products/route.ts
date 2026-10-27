@@ -17,9 +17,11 @@ export async function GET(request: Request) {
 
   try {
     const products = await getProducts({ category, search, sort });
+    // Not cached: the catalogue is edited from the admin bot and a stale list
+    // here is what made added products look like they never saved.
     return NextResponse.json(
       { products, count: products.length },
-      { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" } },
+      { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
     console.error("[api/products] failed:", error);
